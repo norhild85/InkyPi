@@ -1,0 +1,5 @@
+{
+    "display_name": "Google Calendar",
+    "id": "google-calendar",
+    "class": "GoogleCalendar"
+}
