@@ -22,54 +22,73 @@ class GoogleCalendar(BasePlugin):
         return template_params
 
     def generate_image(self, settings, device_config):
-        calendar_urls = settings.get('calendarURLs[]')
-        calendar_colors = settings.get('calendarColors[]')
-        view = settings.get("viewMode")
+        logger.debug("--- Google Calendar Debug Start ---")
+        try:
+            calendar_urls = settings.get('calendarURLs[]')
+            calendar_colors = settings.get('calendarColors[]')
+            view = settings.get("viewMode")
 
-        if not view:
-            raise RuntimeError("View is required")
-        elif view not in ["timeGridDay", "timeGridWeek", "dayGrid", "dayGridMonth", "listMonth"]:
-            raise RuntimeError("Invalid view")
+            logger.debug(f"View mode: {view}")
+            logger.debug(f"Calendar URLs: {calendar_urls}")
 
-        if not calendar_urls:
-            raise RuntimeError("At least one calendar URL is required")
-        for url in calendar_urls:
-            if not url.strip():
-                raise RuntimeError("Invalid calendar URL")
+            if not view:
+                raise RuntimeError("View is required")
+            elif view not in ["timeGridDay", "timeGridWeek", "dayGrid", "dayGridMonth", "listMonth"]:
+                raise RuntimeError("Invalid view")
 
-        dimensions = device_config.get_resolution()
-        if device_config.get_config("orientation") == "vertical":
-            dimensions = dimensions[::-1]
+            if not calendar_urls:
+                raise RuntimeError("At least one calendar URL is required")
+            for url in calendar_urls:
+                if not url.strip():
+                    raise RuntimeError("Invalid calendar URL")
+
+            dimensions = device_config.get_resolution()
+            if device_config.get_config("orientation") == "vertical":
+                dimensions = dimensions[::-1]
+            
+            timezone = device_config.get_config("timezone", default="America/New_York")
+            time_format = device_config.get_config("time_format", default="12h")
+            tz = pytz.timezone(timezone)
+
+            current_dt = datetime.now(tz)
+            start, end = self.get_view_range(view, current_dt, settings)
+            logger.debug(f"Fetching events for date range: {start} to {end}")
+            
+            events = self.fetch_ics_events(calendar_urls, calendar_colors, tz, start, end)
+            logger.debug(f"Found {len(events)} events.")
+            if not events:
+                logger.warn("No events found for ics url")
+            else:
+                # Log the first event to see its structure
+                logger.debug(f"First event details: {events[0]}")
+
+
+            if view == 'timeGridWeek' and settings.get("displayPreviousDays") != "true":
+                view = 'timeGrid'
+
+            template_params = {
+                "view": view,
+                "events": events,
+                "current_dt": current_dt.replace(minute=0, second=0, microsecond=0).isoformat(),
+                "timezone": timezone,
+                "plugin_settings": settings,
+                "time_format": time_format,
+                "font_scale": FONT_SIZES.get(settings.get("fontSize", "normal"))
+            }
+            logger.debug("Rendering image with template params.")
+
+            image = self.render_image(dimensions, "calendar.html", "calendar.css", template_params)
+
+            if not image:
+                raise RuntimeError("Failed to take screenshot, please check logs.")
+            return image
         
-        timezone = device_config.get_config("timezone", default="America/New_York")
-        time_format = device_config.get_config("time_format", default="12h")
-        tz = pytz.timezone(timezone)
-
-        current_dt = datetime.now(tz)
-        start, end = self.get_view_range(view, current_dt, settings)
-        logger.debug(f"Fetching events for {start} --> [{current_dt}] --> {end}")
-        events = self.fetch_ics_events(calendar_urls, calendar_colors, tz, start, end)
-        if not events:
-            logger.warn("No events found for ics url")
-
-        if view == 'timeGridWeek' and settings.get("displayPreviousDays") != "true":
-            view = 'timeGrid'
-
-        template_params = {
-            "view": view,
-            "events": events,
-            "current_dt": current_dt.replace(minute=0, second=0, microsecond=0).isoformat(),
-            "timezone": timezone,
-            "plugin_settings": settings,
-            "time_format": time_format,
-            "font_scale": FONT_SIZES.get(settings.get("fontSize", "normal"))
-        }
-
-        image = self.render_image(dimensions, "calendar.html", "calendar.css", template_params)
-
-        if not image:
-            raise RuntimeError("Failed to take screenshot, please check logs.")
-        return image
+        except Exception as e:
+            logger.error(f"An exception occurred in generate_image: {e}", exc_info=True)
+            # Return a blank image on error, but log it loudly
+            raise
+        finally:
+            logger.debug("--- Google Calendar Debug End ---")
     
     def fetch_ics_events(self, calendar_urls, colors, tz, start_range, end_range):
         parsed_events = []
