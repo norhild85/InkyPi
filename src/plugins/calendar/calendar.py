@@ -90,6 +90,12 @@ class Calendar(BasePlugin):
                 if end:
                     parsed_event['end'] = end
 
+                startdt_aware = datetime.fromisoformat(start).astimezone(tz)
+                enddt_aware = datetime.fromisoformat(end).astimezone(tz)
+                if startdt_aware <= datetime.now(tz) <= enddt_aware:
+                    parsed_event['className'] = parsed_event['className'].append("event-now") if 'className' in parsed_event else ["event-now"]
+                    logger.debug("There's an event right now!")
+
                 parsed_events.append(parsed_event)
 
         return parsed_events
@@ -126,6 +132,7 @@ class Calendar(BasePlugin):
             all_day = True
 
         end = None
+        dtend = None
         if "dtend" in event:
             dtend = event.decoded("dtend")
             if isinstance(dtend, datetime):

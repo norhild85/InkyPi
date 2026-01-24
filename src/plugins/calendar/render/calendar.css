@@ -66,8 +66,32 @@ th {
 
 .fc .fc-toolbar-title {
   font-size: var(--fc-title-font-size) !important;
+  padding: -20px !important;
 }
 
 .fc table {
   font-size: var(--fc-table-font-size) !important;
+}
+.fc-list-day {
+  font-size: var(--fc-table-font-size)*0.8 !important;
+}
+
+.fc-list-day-cushion {
+  padding: 2px !important;
+  background: #cdcdcd !important;
+}
+
+.fc-list-day-today {
+  font-size: var(--fc-table-font-size)*0.95 !important;
+  font-style: italic;
+}
+
+.fc .fc-list-day .fc-list-day-now {
+  border-width: 4px !important;
+  background-color: var(--fc-now-indicator-color) !important;
+}
+
+.event-now {
+  border: 6px solid var(--fc-now-indicator-color) !important;
+  font-weight: 800
 }
