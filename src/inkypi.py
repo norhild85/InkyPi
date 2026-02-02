@@ -19,12 +19,14 @@ import json
 import logging
 import threading
 import argparse
+from datetime import datetime
+import pytz
 from utils.app_utils import generate_startup_image
 from flask import Flask, request, send_from_directory
 from werkzeug.serving import is_running_from_reloader
 from config import Config
 from display.display_manager import DisplayManager
-from refresh_task import RefreshTask
+from refresh_task import RefreshTask, PlaylistRefresh
 from blueprints.main import main_bp
 from blueprints.settings import settings_bp
 from blueprints.plugin import plugin_bp
@@ -33,8 +35,19 @@ from jinja2 import ChoiceLoader, FileSystemLoader
 from plugins.plugin_registry import load_plugins
 from waitress import serve
 
+try:
+    from gpiozero import Button
+    from gpiozero.exc import BadPinFactory
+    GPIO_AVAILABLE = True
+except (ImportError, BadPinFactory):
+    GPIO_AVAILABLE = False
+
 
 logger = logging.getLogger(__name__)
+
+# GPIO Pin Configuration (BCM numbering)
+BUTTON_REFRESH_PIN = 6  # Physical pin 31
+BUTTON_NEXT_PIN = 26    # Physical pin 37
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='InkyPi Display Server')
@@ -60,6 +73,88 @@ template_dirs = [
 app.jinja_loader = ChoiceLoader([FileSystemLoader(directory) for directory in template_dirs])
 
 device_config = Config()
+
+def setup_buttons(refresh_task, device_config):
+    """Initializes GPIO buttons and assigns actions for refresh and next plugin."""
+    if not GPIO_AVAILABLE:
+        logger.warning("gpiozero library not found or failed to initialize. Button support will be disabled.")
+        return
+
+    logger.info("Setting up GPIO buttons.")
+
+    def handle_refresh():
+        """Refreshes the currently displayed plugin instance."""
+        logger.info("Button 1 pressed: Refreshing current view.")
+        try:
+            playlist_manager = device_config.get_playlist_manager()
+            if not playlist_manager.active_playlist:
+                logger.warning("No active playlist. Cannot refresh.")
+                return
+
+            playlist = playlist_manager.get_playlist(playlist_manager.active_playlist)
+            if not playlist or not playlist.plugins:
+                logger.warning("Active playlist not found or is empty. Cannot refresh.")
+                return
+
+            if playlist.current_plugin_index is None:
+                # This can happen if a playlist becomes active but no plugin has been displayed yet.
+                # Default to the first plugin in the list.
+                plugin_instance = playlist.plugins[0]
+            else:
+                plugin_instance = playlist.plugins[playlist.current_plugin_index]
+
+            logger.info(f"Refreshing current plugin: {plugin_instance.name}")
+            refresh_action = PlaylistRefresh(playlist, plugin_instance, force=True)
+            refresh_task.manual_update(refresh_action)
+
+        except Exception as e:
+            logger.error(f"Error during button-triggered refresh: {e}", exc_info=True)
+
+    def handle_next_plugin():
+        """Advances to the next plugin in the active playlist."""
+        logger.info("Button 4 pressed: Displaying next plugin in playlist.")
+        try:
+            playlist_manager = device_config.get_playlist_manager()
+            if not playlist_manager.active_playlist:
+                logger.warning("No active playlist. Cannot advance.")
+                return
+
+            playlist = playlist_manager.get_playlist(playlist_manager.active_playlist)
+            if not playlist or not playlist.plugins:
+                logger.warning("Active playlist not found or is empty. Cannot advance.")
+                return
+
+            # get_next_plugin() advances the playlist's current_plugin_index
+            plugin_instance = playlist.get_next_plugin()
+            logger.info(f"Advancing to next plugin: {plugin_instance.name}")
+            
+            # Force a refresh to display the new plugin immediately
+            refresh_action = PlaylistRefresh(playlist, plugin_instance, force=True) 
+            refresh_task.manual_update(refresh_action)
+
+        except Exception as e:
+            logger.error(f"Error during button-triggered next plugin: {e}", exc_info=True)
+
+    try:
+        # Button pins are based on your request (physical pins 31, 37), which correspond
+        # to BCM pins 6 and 26. Assumes buttons connect GPIO to GND when pressed.
+        button1 = Button(BUTTON_REFRESH_PIN, pull_up=True, bounce_time=0.1)   # Refresh
+        button4 = Button(BUTTON_NEXT_PIN, pull_up=True, bounce_time=0.1)  # Next in playlist
+
+        button1.when_pressed = handle_refresh
+        button4.when_pressed = handle_next_plugin
+        
+        logger.info(f"GPIO buttons configured successfully for pins BCM {BUTTON_REFRESH_PIN} (Refresh) and BCM {BUTTON_NEXT_PIN} (Next Plugin).")
+        
+        # Keep a reference to the button objects to prevent them from being garbage collected,
+        # which would cause the callbacks to stop working.
+        app.config['GPIO_BUTTONS'] = [button1, button4]
+
+    except Exception as e:
+        logger.error(f"Failed to initialize GPIO buttons: {e}")
+        logger.error("This is expected if not running on a non-Raspberry Pi machine.")
+
+
 display_manager = DisplayManager(device_config)
 refresh_task = RefreshTask(device_config, display_manager)
 
@@ -86,6 +181,10 @@ if __name__ == '__main__':
 
     # start the background refresh task
     refresh_task.start()
+
+    # Set up GPIO buttons if not in development mode
+    if not DEV_MODE:
+        setup_buttons(refresh_task, device_config)
 
     # display default inkypi image on startup
     if device_config.get_config("startup") is True:
