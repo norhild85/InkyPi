@@ -1,6 +1,7 @@
 import fnmatch
 import json
 import logging
+import os
 
 from utils.image_utils import resize_image, change_orientation, apply_image_enhancement
 from display.mock_display import MockDisplay
@@ -89,46 +90,53 @@ class DisplayManager:
 
         This is intended as a lightweight visual indicator while a longer refresh runs.
         It composes text onto the last-saved image (`device_config.current_image_file`) and
-        sends that image to the concrete display instance.
+        sends that image directly to the concrete display (bypassing resize/orientation pipeline).
         """
         try:
             # load last saved image if available, otherwise create blank
             if os.path.exists(self.device_config.current_image_file):
-                base = Image.open(self.device_config.current_image_file).convert("RGBA")
+                base = Image.open(self.device_config.current_image_file).convert("RGB")
             else:
-                base = Image.new("RGBA", tuple(self.device_config.get_resolution()), (255, 255, 255, 255))
+                base = Image.new("RGB", tuple(self.device_config.get_resolution()), (255, 255, 255))
 
-            overlay = Image.new("RGBA", base.size, (255, 255, 255, 0))
-            draw = ImageDraw.Draw(overlay)
+            draw = ImageDraw.Draw(base)
 
-            # choose a basic font; fallback if unavailable
+            # use a larger, more visible default font
             try:
                 font = ImageFont.load_default()
             except Exception:
                 font = None
 
-            text_w, text_h = draw.textsize(text, font=font)
-            padding = 8
+            # compute text bounding box using getbbox (modern PIL) or fallback
+            try:
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+            except Exception:
+                # fallback: estimate based on character count
+                text_w = len(text) * 8
+                text_h = 14
+
+            padding = 12
             box_w = text_w + padding * 2
             box_h = text_h + padding * 2
 
             # compute position
             if position[0] == "right":
-                x = base.width - box_w - 10
+                x = base.width - box_w - 15
             else:
-                x = 10
+                x = 15
             if position[1] == "bottom":
-                y = base.height - box_h - 10
+                y = base.height - box_h - 15
             else:
-                y = 10
+                y = 15
 
-            # semi-transparent rectangle
-            draw.rounded_rectangle([x, y, x + box_w, y + box_h], radius=6, fill=(0, 0, 0, 200))
-            draw.text((x + padding, y + padding), text, fill=(255, 255, 255, 255), font=font)
+            # solid black rectangle for visibility
+            draw.rectangle([x, y, x + box_w, y + box_h], fill=(0, 0, 0), outline=(255, 255, 255), width=2)
+            # white text
+            draw.text((x + padding, y + padding), text, fill=(255, 255, 255), font=font)
 
-            composed = Image.alpha_composite(base.convert("RGBA"), overlay)
-
-            # send to display (reuse existing pipeline: let concrete display render)
-            self.display.display_image(composed.convert("RGB"), [])
+            # send directly to concrete display (no resizing/orientation)
+            self.display.display_image(base, [])
         except Exception as e:
             logger.exception(f"Failed to render overlay: {e}")
