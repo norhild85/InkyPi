@@ -22,6 +22,7 @@ import argparse
 from datetime import datetime
 import pytz
 from utils.app_utils import generate_startup_image
+from utils.led_controller import LEDStripController
 from flask import Flask, request, send_from_directory
 from werkzeug.serving import is_running_from_reloader
 from config import Config
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 # GPIO Pin Configuration (BCM numbering)
 BUTTON_REFRESH_PIN = 6  # Physical pin 31
 BUTTON_NEXT_PIN = 26    # Physical pin 37
+BUTTON_LED_TOGGLE_PIN = 19  # Physical pin 35 (for LED strip toggle)
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='InkyPi Display Server')
@@ -74,8 +76,8 @@ app.jinja_loader = ChoiceLoader([FileSystemLoader(directory) for directory in te
 
 device_config = Config()
 
-def setup_buttons(refresh_task, device_config):
-    """Initializes GPIO buttons and assigns actions for refresh and next plugin."""
+def setup_buttons(refresh_task, device_config, led_controller):
+    """Initializes GPIO buttons and assigns actions for refresh, next plugin, and LED toggle."""
     if not GPIO_AVAILABLE:
         logger.warning("gpiozero library not found or failed to initialize. Button support will be disabled.")
         return
@@ -135,20 +137,30 @@ def setup_buttons(refresh_task, device_config):
         except Exception as e:
             logger.error(f"Error during button-triggered next plugin: {e}", exc_info=True)
 
+    def handle_led_toggle():
+        """Toggles the LED strip power."""
+        logger.info("Button pressed: Toggling LED strip.")
+        try:
+            led_controller.toggle()
+        except Exception as e:
+            logger.error(f"Error during button-triggered LED toggle: {e}", exc_info=True)
+
     try:
-        # Button pins are based on your request (physical pins 31, 37), which correspond
-        # to BCM pins 6 and 26. Assumes buttons connect GPIO to GND when pressed.
+        # Button pins are based on your request (physical pins 31, 37, 36), which correspond
+        # to BCM pins 6, 26, and 27. Assumes buttons connect GPIO to GND when pressed.
         button1 = Button(BUTTON_REFRESH_PIN, pull_up=True, bounce_time=0.1)   # Refresh
         button4 = Button(BUTTON_NEXT_PIN, pull_up=True, bounce_time=0.1)  # Next in playlist
+        button_led = Button(BUTTON_LED_TOGGLE_PIN, pull_up=True, bounce_time=0.1)  # LED toggle
 
         button1.when_pressed = handle_refresh
         button4.when_pressed = handle_next_plugin
+        button_led.when_pressed = handle_led_toggle
         
-        logger.info(f"GPIO buttons configured successfully for pins BCM {BUTTON_REFRESH_PIN} (Refresh) and BCM {BUTTON_NEXT_PIN} (Next Plugin).")
+        logger.info(f"GPIO buttons configured successfully for pins BCM {BUTTON_REFRESH_PIN} (Refresh), BCM {BUTTON_NEXT_PIN} (Next Plugin), and BCM {BUTTON_LED_TOGGLE_PIN} (LED Toggle).")
         
         # Keep a reference to the button objects to prevent them from being garbage collected,
         # which would cause the callbacks to stop working.
-        app.config['GPIO_BUTTONS'] = [button1, button4]
+        app.config['GPIO_BUTTONS'] = [button1, button4, button_led]
 
     except Exception as e:
         logger.error(f"Failed to initialize GPIO buttons: {e}")
@@ -157,6 +169,7 @@ def setup_buttons(refresh_task, device_config):
 
 display_manager = DisplayManager(device_config)
 refresh_task = RefreshTask(device_config, display_manager)
+led_controller = LEDStripController()
 
 load_plugins(device_config.get_plugins())
 
@@ -164,6 +177,7 @@ load_plugins(device_config.get_plugins())
 app.config['DEVICE_CONFIG'] = device_config
 app.config['DISPLAY_MANAGER'] = display_manager
 app.config['REFRESH_TASK'] = refresh_task
+app.config['LED_CONTROLLER'] = led_controller
 
 # Set additional parameters
 app.config['MAX_FORM_PARTS'] = 10_000
@@ -184,7 +198,7 @@ if __name__ == '__main__':
 
     # Set up GPIO buttons if not in development mode
     if not DEV_MODE:
-        setup_buttons(refresh_task, device_config)
+        setup_buttons(refresh_task, device_config, led_controller)
 
     # display default inkypi image on startup
     if device_config.get_config("startup") is True:
@@ -212,3 +226,4 @@ if __name__ == '__main__':
         serve(app, host="0.0.0.0", port=PORT, threads=1)
     finally:
         refresh_task.stop()
+        led_controller.cleanup()
