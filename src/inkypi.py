@@ -107,7 +107,15 @@ def setup_buttons(refresh_task, device_config, led_controller):
 
             logger.info(f"Refreshing current plugin: {plugin_instance.name}")
             refresh_action = PlaylistRefresh(playlist, plugin_instance, force=True)
-            refresh_task.manual_update(refresh_action)
+            # Run manual update asynchronously so button press doesn't block callers.
+            def _do_refresh(action):
+                try:
+                    display_manager.display_overlay("Updating...")
+                    refresh_task.manual_update(action)
+                except Exception as e:
+                    logger.error(f"Error during async manual update: {e}", exc_info=True)
+
+            threading.Thread(target=_do_refresh, args=(refresh_action,), daemon=True).start()
 
         except Exception as e:
             logger.error(f"Error during button-triggered refresh: {e}", exc_info=True)
@@ -130,9 +138,17 @@ def setup_buttons(refresh_task, device_config, led_controller):
             plugin_instance = playlist.get_next_plugin()
             logger.info(f"Advancing to next plugin: {plugin_instance.name}")
             
-            # Force a refresh to display the new plugin immediately
-            refresh_action = PlaylistRefresh(playlist, plugin_instance, force=True) 
-            refresh_task.manual_update(refresh_action)
+            # Force a refresh to display the new plugin immediately (async)
+            refresh_action = PlaylistRefresh(playlist, plugin_instance, force=True)
+
+            def _do_next_refresh(action):
+                try:
+                    display_manager.display_overlay("Updating...")
+                    refresh_task.manual_update(action)
+                except Exception as e:
+                    logger.error(f"Error during async next-plugin refresh: {e}", exc_info=True)
+
+            threading.Thread(target=_do_next_refresh, args=(refresh_action,), daemon=True).start()
 
         except Exception as e:
             logger.error(f"Error during button-triggered next plugin: {e}", exc_info=True)
