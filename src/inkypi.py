@@ -111,7 +111,9 @@ def setup_buttons(refresh_task, device_config, led_controller):
             def _do_refresh(action):
                 try:
                     display_manager.display_overlay("Updating...")
+                    time.sleep(0.5)  # Give overlay time to be visible before refresh
                     refresh_task.manual_update(action)
+                    logger.info("Refresh completed, overlay cleared by new image.")
                 except Exception as e:
                     logger.error(f"Error during async manual update: {e}", exc_info=True)
 
@@ -144,7 +146,9 @@ def setup_buttons(refresh_task, device_config, led_controller):
             def _do_next_refresh(action):
                 try:
                     display_manager.display_overlay("Updating...")
+                    time.sleep(0.5)  # Give overlay time to be visible before refresh
                     refresh_task.manual_update(action)
+                    logger.info("Plugin advance completed, overlay cleared by new image.")
                 except Exception as e:
                     logger.error(f"Error during async next-plugin refresh: {e}", exc_info=True)
 
